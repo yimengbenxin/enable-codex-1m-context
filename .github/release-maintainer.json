@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "repository": "yimengbenxin/enable-codex-1m-context",
+  "remote": "origin",
+  "branch": "main",
+  "tag_template": "v{version}",
+  "title_template": "Enable Codex 1M Context v{version}",
+  "release_notes_file": "docs/RELEASE_NOTES_{version}.md",
+  "verify_commands": [
+    {
+      "argv": ["python3", "scripts/self_test.py"],
+      "timeout": 180
+    },
+    {
+      "argv": ["python3", "-m", "compileall", "-q", "scripts"],
+      "timeout": 180
+    }
+  ],
+  "build_commands": [
+    {
+      "argv": ["python3", "scripts/build_release.py", "--version", "{version}"],
+      "timeout": 180
+    }
+  ],
+  "post_build_verify_commands": [],
+  "artifacts": ["dist/enable-codex-1m-context-v{version}.zip"],
+  "prerelease": false,
+  "mark_latest": true
+}
