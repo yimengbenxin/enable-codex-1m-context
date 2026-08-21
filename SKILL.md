@@ -1,124 +1,98 @@
 ---
-name: enable-codex-1m-context
-description: Use when a user wants to enable, install, synchronize, repair, verify, or completely uninstall a temporary 1M-token Codex context workaround for GPT-5.6 Sol on macOS or Windows, especially when Desktop shows 258K or 828K, model catalog values drift, or the setup must be shared across computers.
+name: codex-project-context
+description: View, set, switch, or reset the GPT-5.6 Sol context window for one trusted Codex project. Use when the user asks to change the current project's context to values such as 258k, 600k, or 1m without reading or changing global Codex configuration.
 ---
 
-# Enable Codex 1M Context
+# Manage Codex Context Per Project
 
-Treat this as a temporary compatibility workaround for a locally observed model-catalog inconsistency. Remove it when the official Sol catalog consistently provides the requested context.
+Provide a natural-language control surface backed by deterministic local scripts.
+Apply context settings only through the target project's `.codex/config.toml`.
+Never read or write `~/.codex/config.toml`, read or patch `models_cache.json`,
+generate a replacement model catalog, install a scheduler, or perform global
+migration or cleanup.
 
-Use the bundled deterministic scripts. Do not generate, rewrite, or personalize their code for each computer.
+## Interpret requests
 
-## Scope and requirements
+- “把当前项目切到 600k” means set the context window to `600000` and set
+  automatic compaction to 90 percent (`540000`) unless the user provides a
+  different compaction threshold.
+- “切到 1m，900k 压缩” means context `1000000`, compaction `900000`.
+- “查看当前项目上下文” is read-only status.
+- “恢复默认” or “移除项目覆盖” means safely reset this project's managed
+  values to their pre-install state.
 
-- Support macOS and Windows Codex Desktop installations with Python 3.9 or newer.
-- Resolve Codex home from `--codex-home`, then `CODEX_HOME`, then the current user's `.codex` directory.
-- Read only the official local `models_cache.json`; never read authentication files or call private model-catalog endpoints.
-- Preserve every model entry and every field inside each model entry. Cache-envelope metadata is not required in the generated model catalog. Override `gpt-5.6-sol.max_context_window` to exactly `1000000` only when the current cloud value is lower; preserve a cloud value of `1000000` or higher unchanged.
-- Treat scheduler installation and global `config.toml` edits as authorized only when the user asks to install or enable the workaround. Diagnosis and status requests are read-only.
+Supported context values are `64k` through `1m`. Accept integer tokens or `k` /
+`m` suffixes. Reject a compaction threshold that is not lower than the context
+window.
 
-If Python, `models_cache.json`, or a supported scheduler is unavailable, stop with the exact preflight error. Do not patch the bundled scripts to work around an unsupported environment.
+## Resolve scope
 
-## Locate the bundled scripts
+- Resolve the exact target project root before any write.
+- Pass its absolute path with `--project-root` on every command.
+- Project configuration is loaded only for trusted projects. If the project is
+  untrusted, explain that Codex will ignore its `.codex/` layer.
+- A direct user command to switch or reset the current project authorizes that
+  reversible project-local change. Do not add an extra confirmation unless the
+  project is ambiguous.
+- Preserve unrelated project configuration and comments.
 
-Set `<skill-root>` to the directory containing this `SKILL.md`. Invoke scripts from `<skill-root>/scripts/` with a Python 3.9+ interpreter discovered on the target computer. Never substitute the author's installation path.
+## Set or switch context
 
-## Install
-
-Run a dry-run first:
-
-```text
-<python> <skill-root>/scripts/install_sync.py --dry-run
-```
-
-Review the reported Codex home, source cache, fixed catalog, platform, and scheduler. Then run:
-
-```text
-<python> <skill-root>/scripts/install_sync.py
-```
-
-The installer must:
-
-1. Copy fixed runtime scripts to `<codex-home>/sol-context-sync/bin/`.
-2. Copy the latest cloud-backed cache and raise only Sol's `max_context_window` to `1000000` when the cloud value is lower.
-3. Atomically write `<codex-home>/model-catalog-fixed.json` and retain the last known good file on failure.
-4. Back up and minimally patch top-level config values:
-
-```toml
-model = "gpt-5.6-sol"
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
-model_catalog_json = "<resolved absolute fixed-catalog path>"
-```
-
-5. Install a non-AI system trigger:
-   - macOS: `launchd` watches `models_cache.json` and also checks every 180 seconds.
-   - Windows: Task Scheduler runs every 3 minutes.
-
-Use `--no-schedule` only when the user explicitly prefers manual synchronization.
-
-## Synchronize and inspect
-
-Run one deterministic synchronization without reinstalling:
+For an explicit request such as “把当前项目切到 600k” run:
 
 ```text
-<python> <skill-root>/scripts/sync_catalog.py
+<python> <skill-root>/scripts/set_project_context.py --project-root "<absolute-project-root>" --context 600k
 ```
 
-Check installation state without changes:
+When the user supplies an explicit threshold:
 
 ```text
-<python> <skill-root>/scripts/verify_install.py --strict
+<python> <skill-root>/scripts/set_project_context.py --project-root "<absolute-project-root>" --context 1m --auto-compact 900k
 ```
 
-The synchronizer must copy every current cloud field and every other model unchanged. A malformed cache, missing Sol entry, or duplicate Sol entry must fail without replacing the last known good fixed catalog.
+Use `--dry-run` for ambiguous scope, review, or diagnosis. The setter changes
+only `<project-root>/.codex/config.toml`, maintains one rollback state across
+repeated switches, and stores backups inside the same project `.codex/`
+directory.
 
-When `official_support_detected` is `true`, leave the cloud Sol entry unchanged and keep monitoring. Do not uninstall or disable synchronization automatically. If a later cloud refresh drops below `1000000`, apply the override again on that sync cycle.
-
-## Activate and verify the model window
-
-`model_catalog_json` is loaded at app startup. After installation or a changed fixed catalog:
-
-1. Fully quit and reopen Codex Desktop.
-2. Open the same task or a new task with GPT-5.6 Sol.
-3. Send one short message and wait for the reply.
-4. Pair the nearest `turn_context.payload.model` with the corresponding `task_started.payload.model_context_window` or `token_count.payload.info.model_context_window` in the same session transcript.
-
-Acceptance requires:
-
-- model `gpt-5.6-sol`;
-- fixed `max_context_window` at least `1000000`;
-- effective runtime window consistent with the cloud `effective_context_window_percent` value. At 95 percent, expect approximately `950000`, not a literal UI value of one million; keep the configured values `1000000` and `900000` unchanged.
-- a completed model reply, not config-file evidence alone.
-
-Do not attribute another model's window to Sol. Do not claim that writing the JSON hot-updates already running tasks.
-
-## Completely uninstall
-
-Only when the user explicitly requests removal, run:
+## Status
 
 ```text
-<python> <skill-root>/scripts/uninstall_sync.py --remove-skill
+<python> <skill-root>/scripts/status_project_context.py --project-root "<absolute-project-root>"
 ```
 
-The uninstaller must:
+Use `--strict` when validating the package or installation. Static acceptance
+requires exactly one project-level `model`, `model_context_window`, and
+`model_auto_compact_token_limit` plus valid project-local rollback state.
 
-1. Remove the macOS launchd job or Windows scheduled task.
-2. Restore only config keys that still match installer-managed values; leave user-modified keys untouched and report them.
-3. Remove the generated fixed catalog and stable runtime directory.
-4. Validate the Skill directory name and required files before deleting the Skill itself.
-5. Leave a pre-uninstall config backup under Codex home and require an app restart.
+## Reset the project override
 
-If Windows prevents deletion of the currently executing Skill, report the exact directory for deletion after Codex closes. Do not broaden the deletion target.
+```text
+<python> <skill-root>/scripts/reset_project_context.py --project-root "<absolute-project-root>"
+```
 
-## Validate the packaged Skill
+The resetter restores only values still matching the most recent managed
+settings. It preserves later user edits and retains backups under the project
+`.codex/` directory.
 
-Run isolated tests without touching the real Codex home:
+## Activation and runtime verification
+
+Changing a project config does not resize an already-running task. After a set,
+switch, or reset:
+
+1. Fully restart Codex.
+2. Reopen the same existing conversation in the trusted target project; do not
+   create a new task merely to activate the change.
+3. Confirm the active model is `gpt-5.6-sol` and runtime context evidence is
+   consistent with the configured budget.
+
+The project override applies to conversations in that project when they are
+loaded or resumed; it is not a hot per-thread update and does not affect global
+defaults. Increasing the window does not reconstruct detail lost in an earlier
+compaction. Do not claim runtime activation from config-file evidence alone.
+
+## Validate the packaged skill
 
 ```text
 <python> <skill-root>/scripts/self_test.py
 ```
-
-Report platform, resolved Codex home, scheduler type, source and output paths, source and target Sol maxima, expected effective window, restart requirement, same-turn runtime evidence, and whether official support is now detected.
-
-Never trigger uninstall solely because one cloud refresh reports `1000000` or higher; the source may regress on a later refresh.

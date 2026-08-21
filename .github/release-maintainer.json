@@ -4,7 +4,7 @@
   "remote": "origin",
   "branch": "main",
   "tag_template": "v{version}",
-  "title_template": "Enable Codex 1M Context v{version}",
+  "title_template": "Codex Project Context v{version}",
   "release_notes_file": "docs/RELEASE_NOTES_{version}.md",
   "verify_commands": [
     {
@@ -23,7 +23,7 @@
     }
   ],
   "post_build_verify_commands": [],
-  "artifacts": ["dist/enable-codex-1m-context-v{version}.zip"],
+  "artifacts": ["dist/codex-project-context-v{version}.zip"],
   "prerelease": false,
   "mark_latest": true
 }

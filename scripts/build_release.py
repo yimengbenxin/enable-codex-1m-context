@@ -9,19 +9,18 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PACKAGE_NAME = "enable-codex-1m-context"
-FIXED_TIMESTAMP = (2026, 8, 17, 0, 0, 0)
+PACKAGE_NAME = "codex-project-context"
+FIXED_TIMESTAMP = (2026, 8, 21, 0, 0, 0)
 INCLUDED_FILES = (
     "SKILL.md",
     "README.md",
     "LICENSE",
     "agents/openai.yaml",
-    "scripts/context_sync_common.py",
-    "scripts/install_sync.py",
+    "scripts/project_context_common.py",
+    "scripts/reset_project_context.py",
     "scripts/self_test.py",
-    "scripts/sync_catalog.py",
-    "scripts/uninstall_sync.py",
-    "scripts/verify_install.py",
+    "scripts/set_project_context.py",
+    "scripts/status_project_context.py",
 )
 
 
@@ -32,7 +31,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def source_version() -> str:
-    source = (ROOT / "scripts/context_sync_common.py").read_text(encoding="utf-8")
+    source = (ROOT / "scripts/project_context_common.py").read_text(encoding="utf-8")
     match = re.search(r'^VERSION = "([^"]+)"$', source, re.MULTILINE)
     if not match:
         raise SystemExit("VERSION not found in scripts/context_sync_common.py")

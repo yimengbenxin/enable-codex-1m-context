@@ -1,4 +1,4 @@
 interface:
-  display_name: "同步 Codex Sol 1M 上下文"
-  short_description: "跨平台同步 Sol 模型目录、启用 1M 上下文并安全卸载"
-  default_prompt: "Use $enable-codex-1m-context to install or verify the portable Sol 1M context workaround on this computer."
+  display_name: "Codex 项目上下文管理"
+  short_description: "用一句话查看、切换或恢复当前项目的上下文窗口"
+  default_prompt: "Use $codex-project-context to switch this project to 600k, leave global configuration untouched, and tell me to restart Codex and reopen this same conversation."

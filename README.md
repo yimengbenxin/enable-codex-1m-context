@@ -1,136 +1,157 @@
-# Enable Codex 1M Context
+# Codex Project Context
 
-A portable Codex skill that repairs a locally observed GPT-5.6 Sol model-catalog mismatch in Codex Desktop on macOS and Windows.
+A portable Codex skill for setting, inspecting, switching, and safely resetting GPT-5.6 Sol context limits for one trusted project at a time.
+
+The GitHub repository keeps the historical slug `enable-codex-1m-context` for release continuity. The skill itself is named `codex-project-context`; v2.1.0 is the project-scoped successor to the repository's v1.0.1 global catalog workaround.
 
 > [!IMPORTANT]
-> This is an independent, temporary compatibility workaround, not an official OpenAI package. OpenAI currently documents GPT-5.6 Sol with a 1,050,000-token API context window. This skill does not increase the model's server-side capability or bypass account, workspace, product, or rate limits; it only keeps a local Codex model catalog and related configuration consistent when Desktop reports a lower value.
+> This is an independent Codex skill, not an official OpenAI package. It changes only the target project's `.codex/config.toml`. It never edits `~/.codex/config.toml`, reads `models_cache.json`, installs a scheduler, or claims to hot-update a running task.
 
 ## Why this exists
 
-Codex Desktop can occasionally retain a local `models_cache.json` entry whose Sol context metadata is lower than the currently expected value. A one-time manual edit is fragile: the cache can refresh, the app loads catalogs at startup, and a malformed replacement can break model discovery.
+Different Codex projects can need different context budgets. A global setting makes unrelated projects inherit the same model and compaction behavior, while manual edits are easy to repeat incorrectly or apply to the wrong directory. This skill provides an explicit, reversible project-local control surface for values from 64k through 1m.
 
-This skill turns that repair into a deterministic, reversible workflow. It copies the current local catalog, changes only `gpt-5.6-sol.max_context_window` when the value is below 1,000,000, preserves all other model fields, and verifies the installed state.
+The intended outcome is a trusted project whose context setting is visible, reproducible, and easy to roll back without changing global Codex defaults.
 
 ## Problems solved
 
-- Replaces repeated hand-editing after model-cache refreshes.
-- Rejects missing, malformed, or duplicate Sol entries without replacing the last known good output.
-- Keeps macOS and Windows setup behavior aligned.
-- Backs up and minimally patches only the managed top-level Codex configuration keys.
-- Provides strict status checks and a conservative uninstall path.
+- Prevents an ambiguous current-directory edit from changing the wrong project.
+- Avoids global configuration changes when only one project needs a different context budget.
+- Preserves unrelated TOML settings and comments while managing exactly three top-level keys.
+- Rejects unsafe roots, invalid token values, duplicate managed keys, and invalid compaction thresholds.
+- Keeps rollback state inside the same project and preserves later user edits during reset.
 
 ## Capabilities
 
-- Dry-run installation before any persistent change.
-- Atomic fixed-catalog generation from the official local `models_cache.json`.
-- Preservation of a cloud value at or above 1,000,000.
-- Automatic resynchronization with `launchd` on macOS or Task Scheduler on Windows.
-- Manual synchronization for users who choose `--no-schedule`.
-- Strict installation verification with machine-readable JSON output.
-- Safe uninstall that restores only values still matching installer-managed settings.
-- Isolated self-tests that do not touch the real Codex home.
+- Set or switch a project to values such as `258k`, `600k`, or `1m`.
+- Choose an explicit automatic-compaction threshold or default to 90% of the context window.
+- Run a dry-run plan before writing.
+- Inspect status with strict static checks and JSON output.
+- Reset only the skill-managed values to their recorded pre-change state.
+- Maintain timestamped project-local backups and rollback state.
+- Run isolated tests without touching the operator's real Codex home or a target project.
 
 ## Architecture and how it works
 
 ```mermaid
 flowchart LR
-    U["User or Codex agent"] --> I["install_sync.py"]
-    C["Local models_cache.json"] --> S["Deterministic catalog synchronizer"]
-    I --> S
-    S -->|"validate and copy; adjust Sol only if below 1M"| F["model-catalog-fixed.json"]
-    I --> B["config.toml backup"]
-    I --> P["Minimal managed config patch"]
-    I --> J["launchd or Task Scheduler"]
-    J --> S
-    F --> D["Codex Desktop after restart"]
-    P --> D
-    V["verify_install.py and transcript evidence"] --> D
-    T["self_test.py in temporary directories"] --> S
+    U["User or Codex agent"] --> S["set_project_context.py"]
+    U --> Q["status_project_context.py"]
+    U --> R["reset_project_context.py"]
+    S --> G["Resolve explicit project root"]
+    Q --> G
+    R --> G
+    G --> C["Target project's .codex/config.toml"]
+    S --> B["Project-local backup and rollback state"]
+    R --> B
+    C --> V["Codex Desktop after restart"]
+    T["self_test.py with temporary projects"] --> S
+    T --> Q
+    T --> R
 ```
 
-All model-catalog processing is local. The scheduler is a non-AI operating-system trigger that reruns the bundled synchronizer.
+The scripts manage only the target project's top-level `model`, `model_context_window`, and `model_auto_compact_token_limit` assignments. The project must still be trusted for Codex to load its `.codex/` layer.
 
 ## Requirements
 
 - macOS or Windows
-- Codex Desktop with a local `models_cache.json`
 - Python 3.9 or newer
-- A supported scheduler unless installing with `--no-schedule`
+- A target project directory that is neither the filesystem root nor the user's home directory
+- A trusted project in Codex Desktop for the project-level override to take effect
 
 ## Installation
 
-Download the release ZIP, extract it, and install the directory as a Codex skill named `enable-codex-1m-context`. Ask Codex to use `$enable-codex-1m-context`, or invoke the scripts directly from the extracted skill directory.
+Download the v2.1.0 ZIP, extract it, and install the enclosed `codex-project-context` directory as a Codex skill. The scripts can also be invoked directly from that directory.
 
-Always inspect a dry run first:
-
-```bash
-python3 scripts/install_sync.py --dry-run
-python3 scripts/install_sync.py
-```
-
-To avoid scheduler installation and synchronize manually:
+Verify the package without changing any real project:
 
 ```bash
-python3 scripts/install_sync.py --no-schedule
-python3 scripts/sync_catalog.py
+python3 scripts/self_test.py
 ```
-
-The scripts resolve Codex home in this order: `--codex-home`, `CODEX_HOME`, then the current user's `.codex` directory.
 
 ## Usage workflow
 
-1. Run the installer dry run and review the reported paths and scheduler.
-2. Run the installer.
-3. Fully quit and reopen Codex Desktop because the model catalog is loaded at startup.
-4. Select GPT-5.6 Sol, send a short message, and wait for a completed reply.
-5. Run `python3 scripts/verify_install.py --strict`.
-6. For runtime acceptance, pair the same session's Sol model record with its reported effective context window; configuration evidence alone is insufficient.
-
-At an `effective_context_window_percent` of 95, a fixed maximum of 1,000,000 is expected to produce an effective runtime window near 950,000 rather than a literal one million.
-
-## Completely uninstall
-
-Only run removal when that is the intended action:
+Always pass the absolute target project root. Preview a change first when the scope needs review:
 
 ```bash
-python3 scripts/uninstall_sync.py --remove-skill
+python3 scripts/set_project_context.py \
+  --project-root "/absolute/path/to/project" \
+  --context 600k \
+  --dry-run
 ```
 
-The uninstaller removes the scheduler, generated catalog, and stable runtime directory. It restores only configuration keys that still match installer-managed values, leaves user-modified values untouched, writes a pre-uninstall backup, and requires an app restart.
+Apply a 1m project override with 900k automatic compaction:
+
+```bash
+python3 scripts/set_project_context.py \
+  --project-root "/absolute/path/to/project" \
+  --context 1m \
+  --auto-compact 900k
+```
+
+Inspect the project-local state without changing it:
+
+```bash
+python3 scripts/status_project_context.py \
+  --project-root "/absolute/path/to/project" \
+  --strict
+```
+
+After setting or switching:
+
+1. Fully restart Codex Desktop.
+2. Reopen the same existing conversation in the trusted target project.
+3. Confirm that the active model is `gpt-5.6-sol` and that runtime evidence matches the configured budget.
+
+The setting is not a hot per-thread update. Increasing a window also cannot reconstruct detail that was already lost during an earlier compaction.
+
+## Reset
+
+Preview a rollback:
+
+```bash
+python3 scripts/reset_project_context.py \
+  --project-root "/absolute/path/to/project" \
+  --dry-run
+```
+
+Apply it only when removal is intended:
+
+```bash
+python3 scripts/reset_project_context.py \
+  --project-root "/absolute/path/to/project"
+```
+
+Reset restores only keys that still match the most recent managed values. If a user changed a managed key afterward, it is preserved and reported. Backups remain inside the target project's `.codex/codex-project-context-backups/` directory.
 
 ## Boundaries and limitations
 
-- The tool is a local compatibility workaround, not an OpenAI service or official Codex feature.
-- It does not call OpenAI APIs, private model-catalog endpoints, or authentication files.
-- It does not change account entitlements, rate limits, pricing, or server-side model behavior.
-- It targets only `gpt-5.6-sol` and refuses ambiguous or malformed source data.
-- It cannot hot-update an already running Codex task; restart and same-session runtime evidence are required.
-- Support is tested through simulated macOS and Windows paths. A real Windows scheduler installation was not performed in the v1.0.1 release verification.
-- Remove the workaround when Codex Desktop consistently supplies suitable official catalog metadata for the user's environment.
+- Scope is one explicit project; global Codex defaults are intentionally out of scope.
+- The skill does not read or modify authentication data, global Codex configuration, model catalogs, or scheduler state.
+- It does not change account entitlements, server-side model behavior, rate limits, or pricing.
+- A project must be trusted by Codex Desktop; the scripts cannot grant that trust.
+- Configuration evidence alone does not prove runtime activation; restart and same-conversation verification are required.
+- The package is tested with simulated project paths on macOS. A real Windows Codex Desktop runtime was not executed for v2.1.0.
 
 ## Privacy, data, and network behavior
 
-The bundled Python code reads local Codex model metadata and managed configuration files. It writes a fixed local catalog, backups, status/install-state JSON, scheduler definitions, and optional local logs. It contains no telemetry and makes no network requests. Normal Codex Desktop operation and downloading this release remain subject to their own network behavior.
+All bundled operations are local and make no network requests or telemetry calls. The scripts read and write only the explicitly supplied project's `.codex/config.toml`, project-local backups, and rollback-state JSON. They do not inspect `~/.codex`, credentials, or model caches. Normal Codex Desktop behavior and downloading this release have their own network behavior.
 
 ## Verification
 
-Run the isolated test suite:
+Run the package tests and compile check:
 
 ```bash
 python3 scripts/self_test.py
 python3 -m compileall -q scripts
 ```
 
-Release v1.0.1 was verified on macOS with Python 3 by running seven isolated unit/integration tests covering catalog preservation, invalid-source rollback, configuration restoration, scheduler payloads, Windows path escaping, and dry runs for both supported platforms. The tests use temporary directories and do not touch the operator's real Codex home.
+v2.1.0 was verified with six isolated tests covering project-root safety, preservation of unrelated TOML, safe reset after user edits, absence of global-config references, set/status/reset behavior, and token parsing/bounds. The tests use temporary project directories.
 
 ## Release variants
 
-The GitHub Release contains one portable skill ZIP plus a generated SHA-256 manifest. There is no connected or telemetry-enabled variant.
+The GitHub Release contains one portable skill ZIP and a generated SHA-256 manifest. There is no connected, telemetry-enabled, scheduler, or global-catalog variant.
 
 ## License and help
 
-Licensed under the [MIT License](LICENSE). Report reproducible problems through this repository's GitHub Issues page. Include the platform, Python version, command, sanitized JSON output, and whether a scheduler was enabled; never include authentication files or tokens.
-
-## Official reference
-
-OpenAI's current GPT-5.6 Sol model page documents the model's API context window and may change independently of Codex Desktop's local catalog behavior: <https://developers.openai.com/api/docs/models/gpt-5.6-sol>.
+Licensed under the repository's [MIT License](LICENSE). Report reproducible issues on [GitHub Issues](https://github.com/yimengbenxin/enable-codex-1m-context/issues) with the platform, Python version, exact command, sanitized JSON output, and whether the project is trusted. Do not attach credentials or private configuration files.

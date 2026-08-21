@@ -1,176 +1,177 @@
 #!/usr/bin/env python3
-"""Run isolated portability tests without touching the real Codex configuration."""
+"""Run isolated tests for the project-scoped Codex context skill."""
 
 from __future__ import annotations
 
 import json
-import plistlib
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from context_sync_common import (
-    SyncError,
-    TARGET_MAX_CONTEXT_WINDOW,
+from project_context_common import (
+    ContextConfigError,
     extract_top_level_config_lines,
-    managed_config_lines,
-    patch_config_text,
-    restore_config_text,
-    sync_catalog,
+    normalize_context_settings,
+    parse_token_value,
+    patch_project_config_text,
+    resolve_project_root,
+    restore_managed_config_text,
 )
-from install_sync import mac_launch_agent_payload, windows_task_action
 
 
-class PortableContextSyncTests(unittest.TestCase):
+SCRIPTS = Path(__file__).resolve().parent
+
+
+class ProjectContextTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="sol-context-sync-test-")
-        self.codex_home = Path(self.temporary.name) / ".codex"
-        self.codex_home.mkdir(parents=True)
-        self.source = self.codex_home / "models_cache.json"
-        self.source.write_text(
-            json.dumps(
-                {
-                    "etag": "test-etag",
-                    "models": [
-                        {
-                            "slug": "gpt-5.6-sol",
-                            "context_window": 272000,
-                            "max_context_window": 272000,
-                            "effective_context_window_percent": 95,
-                            "description": "keep this field",
-                        },
-                        {
-                            "slug": "gpt-5.6-luna",
-                            "context_window": 272000,
-                            "max_context_window": 872000,
-                            "effective_context_window_percent": 95,
-                        },
-                    ],
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        self.temporary = tempfile.TemporaryDirectory(prefix="codex-project-context-test-")
+        self.root = Path(self.temporary.name)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.fake_home = self.root / "home"
+        self.fake_home.mkdir()
+        self.user_config = self.fake_home / ".codex" / "config.toml"
+        self.user_config.parent.mkdir()
+        self.user_config.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
+        self.environment = dict(os.environ)
+        self.environment["HOME"] = str(self.fake_home)
+        self.environment.pop("CODEX_HOME", None)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_sync_changes_only_sol_maximum(self) -> None:
-        result = sync_catalog(self.codex_home)
-        output = json.loads((self.codex_home / "model-catalog-fixed.json").read_text(encoding="utf-8"))
-        self.assertEqual(list(output), ["models"])
-        sol = next(model for model in output["models"] if model["slug"] == "gpt-5.6-sol")
-        luna = next(model for model in output["models"] if model["slug"] == "gpt-5.6-luna")
-        self.assertEqual(sol["max_context_window"], TARGET_MAX_CONTEXT_WINDOW)
-        self.assertEqual(sol["description"], "keep this field")
-        self.assertEqual(luna["max_context_window"], 872000)
-        self.assertEqual(result["expected_effective_window"], 950000)
-        self.assertTrue(result["override_applied"])
-        self.assertFalse(result["official_support_detected"])
+    def run_script(self, name: str, *arguments: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / name), *arguments],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=self.environment,
+        )
 
-    def test_native_one_million_is_preserved_and_later_drop_is_overridden(self) -> None:
-        source = json.loads(self.source.read_text(encoding="utf-8"))
-        sol = next(model for model in source["models"] if model["slug"] == "gpt-5.6-sol")
-        sol["max_context_window"] = 1_050_000
-        self.source.write_text(json.dumps(source), encoding="utf-8")
-        native_result = sync_catalog(self.codex_home)
-        native_output = json.loads((self.codex_home / "model-catalog-fixed.json").read_text(encoding="utf-8"))
-        native_sol = next(model for model in native_output["models"] if model["slug"] == "gpt-5.6-sol")
-        self.assertEqual(native_sol["max_context_window"], 1_050_000)
-        self.assertFalse(native_result["override_applied"])
-        self.assertTrue(native_result["official_support_detected"])
-
-        sol["max_context_window"] = 272000
-        self.source.write_text(json.dumps(source), encoding="utf-8")
-        fallback_result = sync_catalog(self.codex_home)
-        fallback_output = json.loads((self.codex_home / "model-catalog-fixed.json").read_text(encoding="utf-8"))
-        fallback_sol = next(model for model in fallback_output["models"] if model["slug"] == "gpt-5.6-sol")
-        self.assertEqual(fallback_sol["max_context_window"], TARGET_MAX_CONTEXT_WINDOW)
-        self.assertTrue(fallback_result["override_applied"])
-
-    def test_config_patch_and_safe_restore(self) -> None:
+    def test_patch_and_restore_preserve_unrelated_project_config(self) -> None:
         original = (
-            "# keep this comment\n"
+            "# project comment\n"
             'model = "gpt-5.6-luna"\n'
-            "model_context_window = 500000\n"
             "notify = [\"example\"]\n\n"
             "[features]\n"
             "hooks = true\n"
         )
-        output_path = self.codex_home / "model-catalog-fixed.json"
-        patched, previous, managed = patch_config_text(original, output_path)
+        patched, previous, managed = patch_project_config_text(original, 600_000, 540_000)
         found = extract_top_level_config_lines(patched)
-        for key, expected in managed.items():
-            self.assertEqual(found[key], expected)
-            self.assertEqual(patched.count(f"{key} ="), 1)
-        self.assertIn("# keep this comment", patched)
+        self.assertEqual(found, managed)
+        self.assertIn("# project comment", patched)
         self.assertIn("[features]", patched)
-
-        restored, skipped = restore_config_text(patched, previous, managed)
+        restored, skipped = restore_managed_config_text(patched, previous, managed)
         self.assertFalse(skipped)
-        restored_lines = extract_top_level_config_lines(restored)
-        self.assertEqual(restored_lines["model"], 'model = "gpt-5.6-luna"')
-        self.assertEqual(restored_lines["model_context_window"], "model_context_window = 500000")
-        self.assertIsNone(restored_lines["model_catalog_json"])
+        self.assertEqual(extract_top_level_config_lines(restored)["model"], 'model = "gpt-5.6-luna"')
 
-        user_modified = patched.replace('model = "gpt-5.6-sol"', 'model = "gpt-5.6-terra"', 1)
-        restored_modified, skipped_modified = restore_config_text(user_modified, previous, managed)
-        self.assertIn("model", skipped_modified)
-        self.assertIn('model = "gpt-5.6-terra"', restored_modified)
-        self.assertNotIn('model = "gpt-5.6-luna"', restored_modified)
+    def test_set_status_reset_is_project_only(self) -> None:
+        dry_run = self.run_script(
+            "set_project_context.py",
+            "--project-root", str(self.project),
+            "--context", "600k",
+            "--dry-run",
+        )
+        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+        self.assertFalse((self.project / ".codex").exists())
 
-    def test_invalid_source_preserves_last_known_good_output(self) -> None:
-        sync_catalog(self.codex_home)
-        output_path = self.codex_home / "model-catalog-fixed.json"
-        original_output = output_path.read_bytes()
-        self.source.write_text('{"models": []}', encoding="utf-8")
-        with self.assertRaises(SyncError):
-            sync_catalog(self.codex_home)
-        self.assertEqual(output_path.read_bytes(), original_output)
+        apply_result = self.run_script(
+            "set_project_context.py",
+            "--project-root", str(self.project),
+            "--context", "600k",
+        )
+        self.assertEqual(apply_result.returncode, 0, apply_result.stderr)
+        apply_report = json.loads(apply_result.stdout)
+        self.assertTrue(apply_report["app_restart_required"])
+        self.assertTrue(apply_report["reopen_same_conversation_required"])
+        self.assertFalse(apply_report["new_task_required"])
+        project_config = self.project / ".codex" / "config.toml"
+        self.assertTrue(project_config.exists())
+        project_text = project_config.read_text(encoding="utf-8")
+        self.assertIn("model_context_window = 600000", project_text)
+        self.assertIn("model_auto_compact_token_limit = 540000", project_text)
+        self.assertEqual(self.user_config.read_text(encoding="utf-8"), 'model = "gpt-5.6-luna"\n')
 
-    def test_windows_paths_are_toml_escaped(self) -> None:
-        windows_path = Path(r"C:\Codex Data\.codex\model-catalog-fixed.json")
-        line = managed_config_lines(windows_path)["model_catalog_json"]
-        self.assertIn(r"C:\\Codex Data", line)
+        status = self.run_script(
+            "status_project_context.py", "--project-root", str(self.project), "--strict"
+        )
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        status_report = json.loads(status.stdout)
+        self.assertTrue(status_report["ok"])
+        self.assertEqual(status_report["context_window"], "600000")
+        self.assertTrue(status_report["reopen_same_conversation"])
+        self.assertFalse(status_report["new_task_required"])
 
-    def test_scheduler_payloads_use_resolved_paths(self) -> None:
-        python_path = Path("/runtime/python3")
-        sync_script = Path("/stable path/sync_catalog.py")
-        log_path = self.codex_home / "sol-context-sync" / "sync.log"
-        payload = mac_launch_agent_payload(python_path, sync_script, self.codex_home, log_path)
-        encoded = plistlib.dumps(payload)
-        decoded = plistlib.loads(encoded)
-        self.assertEqual(decoded["StartInterval"], 180)
-        self.assertEqual(decoded["WatchPaths"], [str(self.source)])
-        action = windows_task_action(python_path, sync_script, self.codex_home, log_path)
-        self.assertIn("sync_catalog.py", action)
-        self.assertIn("--codex-home", action)
+        switch = self.run_script(
+            "set_project_context.py",
+            "--project-root", str(self.project),
+            "--context", "1m",
+            "--auto-compact", "900k",
+        )
+        self.assertEqual(switch.returncode, 0, switch.stderr)
+        switched_text = project_config.read_text(encoding="utf-8")
+        self.assertIn("model_context_window = 1000000", switched_text)
+        self.assertIn("model_auto_compact_token_limit = 900000", switched_text)
 
-    def test_installer_dry_runs_for_both_platforms(self) -> None:
-        installer = Path(__file__).resolve().parent / "install_sync.py"
-        for target in ("macos", "windows"):
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(installer),
-                    "--codex-home",
-                    str(self.codex_home),
-                    "--platform",
-                    target,
-                    "--dry-run",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            report = json.loads(result.stdout)
-            self.assertTrue(report["ok"])
-            self.assertEqual(report["platform"], target)
-        self.assertFalse((self.codex_home / "model-catalog-fixed.json").exists())
-        self.assertFalse((self.codex_home / "sol-context-sync").exists())
+        reset_dry = self.run_script(
+            "reset_project_context.py", "--project-root", str(self.project), "--dry-run"
+        )
+        self.assertEqual(reset_dry.returncode, 0, reset_dry.stderr)
+        self.assertTrue(project_config.exists())
+
+        reset = self.run_script("reset_project_context.py", "--project-root", str(self.project))
+        self.assertEqual(reset.returncode, 0, reset.stderr)
+        self.assertFalse(project_config.exists())
+        self.assertEqual(self.user_config.read_text(encoding="utf-8"), 'model = "gpt-5.6-luna"\n')
+
+    def test_reset_preserves_user_modified_managed_key(self) -> None:
+        apply_result = self.run_script(
+            "set_project_context.py",
+            "--project-root", str(self.project),
+            "--context", "600k",
+        )
+        self.assertEqual(apply_result.returncode, 0, apply_result.stderr)
+        project_config = self.project / ".codex" / "config.toml"
+        changed = project_config.read_text(encoding="utf-8").replace(
+            'model = "gpt-5.6-sol"', 'model = "gpt-5.6-terra"', 1
+        )
+        project_config.write_text(changed, encoding="utf-8")
+        reset = self.run_script("reset_project_context.py", "--project-root", str(self.project))
+        self.assertEqual(reset.returncode, 0, reset.stderr)
+        report = json.loads(reset.stdout)
+        self.assertIn("model", report["skipped_user_modified_keys"])
+        self.assertIn('model = "gpt-5.6-terra"', project_config.read_text(encoding="utf-8"))
+
+    def test_token_parsing_and_bounds(self) -> None:
+        self.assertEqual(parse_token_value("600k"), 600_000)
+        self.assertEqual(parse_token_value("0.6m"), 600_000)
+        self.assertEqual(normalize_context_settings("600k"), (600_000, 540_000))
+        self.assertEqual(normalize_context_settings("1m", "900k"), (1_000_000, 900_000))
+        with self.assertRaises(ContextConfigError):
+            normalize_context_settings("2m")
+        with self.assertRaises(ContextConfigError):
+            normalize_context_settings("600k", "600k")
+
+    def test_runtime_scripts_do_not_reference_global_codex_config(self) -> None:
+        runtime_files = [
+            SCRIPTS / "project_context_common.py",
+            SCRIPTS / "set_project_context.py",
+            SCRIPTS / "status_project_context.py",
+            SCRIPTS / "reset_project_context.py",
+        ]
+        forbidden = ("CODEX_HOME", "models_cache.json", "model-catalog-fixed.json")
+        for runtime_file in runtime_files:
+            source = runtime_file.read_text(encoding="utf-8")
+            for marker in forbidden:
+                self.assertNotIn(marker, source, f"{marker} found in {runtime_file}")
+
+    def test_broad_project_roots_are_rejected(self) -> None:
+        with self.assertRaises(ContextConfigError):
+            resolve_project_root(Path(self.project.anchor))
 
 
 if __name__ == "__main__":
